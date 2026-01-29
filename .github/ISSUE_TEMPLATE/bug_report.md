@@ -11,9 +11,9 @@ A clear description of the bug.
 What you expected to happen.
 
 ## Steps to reproduce
-1. 
-2. 
-3. 
+1.
+2.
+3.
 
 ## Logs / screenshots
 Paste relevant logs or screenshots.
