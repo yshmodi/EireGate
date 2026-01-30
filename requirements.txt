@@ -10,6 +10,8 @@ langchain-core>=0.3.50
 langchain-google-genai>=4.2.0     # ← Gemini integration (latest as of Jan 2026: 4.2.0)
 langgraph>=0.3.0                  # Stateful graphs, checkpoints, persistence
 langgraph-checkpoint-sqlite>=1.0.0
+langgraph-checkpoint-postgres>=3.0.0
+psycopg[binary]>=3.3.0
 
 # Data validation & settings
 pydantic>=2.10.0
