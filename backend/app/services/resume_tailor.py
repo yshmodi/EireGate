@@ -1,101 +1,90 @@
-import os
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field
-from typing import List
-from tenacity import retry, stop_after_attempt, wait_exponential
+from loguru import logger
+
 from ..models.tailored_resume import TailoredResume
+from ..core.llm_router import invoke_with_fallback, get_current_provider
 
-load_dotenv()
-
-llm = ChatGoogleGenerativeAI(
-    model="models/gemini-2.5-flash",
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
-    temperature=0.1,
-    max_output_tokens=4096,
-)
-
-structured_llm = llm.with_structured_output(TailoredResume, method="json_schema")
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", """
-You are an expert Irish tech recruiter helping non-EEA graduates tailor resumes for Critical Skills Employment Permit roles.
-Target companies (e.g. Workday, Stripe, SIG, Accenture, HubSpot) value quantified impact, cloud/AI skills, full-stack exposure.
+You are an expert tech recruiter helping candidates tailor resumes for specific job applications.
 
-Given the parsed resume and target role/company, produce:
-- Professional summary: concise, keyword-rich, highlight recent Irish Master's (Level 9) for Stamp 1G eligibility.
-- 4–8 achievement bullets: start with strong action verbs, preserve/include metrics, weave in role-relevant keywords (e.g. Python, Machine Learning, AWS, LLMs, LangChain).
-- Key skills: top 10–15, re-ranked and prioritized for the role.
-- Cover letter note: brief, professional mention of visa eligibility (e.g. eligible for 24-month Stamp 1G) Ensure cover_letter_note is a complete 1-2 sentence..
+Given the parsed resume and job description, produce:
+- Professional summary: concise, keyword-rich, tailored to the specific role and company. Highlight relevant experience and skills.
+- 5-7 achievement bullets: start with strong action verbs, preserve metrics from original resume, weave in keywords from the JD.
+- Key skills: top 10-15, re-ranked and prioritized based on the job requirements.
 
-2026 thresholds reminder (do NOT include in output unless explicitly asked):
-- Graduate CSEP: €36,848
-- Graduate GEP: €34,009
+Focus ONLY on skills, experience, and achievements. No visa, work authorization, or immigration mentions.
 
 Output ONLY valid structured JSON — no extra text.
 """),
     ("human", """
 Parsed resume: {parsed_resume}
 
-Target role: {target_role}
-Target company/context: {target_company} (Ireland)
+Job Description:
+{jd_text}
 
-Tailor the resume now.
+Target role: {target_role}
+Target company: {target_company}
+
+Tailor the resume to match this job.
 """)
 ])
 
-chain = prompt | structured_llm
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-def tailor_resume(parsed_resume: dict, target_role: str, target_company: str = "") -> TailoredResume:
+def tailor_resume(
+    parsed_resume: dict,
+    target_role: str,
+    target_company: str = "",
+    jd_text: str = ""
+) -> TailoredResume:
     """
-    Tailor resume using Gemini structured output.
-    Input: dict from parsed_resume (not Resume object).
+    Tailor resume using multi-LLM router with automatic fallback.
+    Pure skill-focused tailoring - no visa/authorization logic.
     """
-    result = chain.invoke({
-        "parsed_resume": parsed_resume,
-        "target_role": target_role,
-        "target_company": target_company
-    })
+    logger.info(f"Tailoring resume with {get_current_provider()}...")
+
+    result = invoke_with_fallback(
+        prompt_template=prompt,
+        input_data={
+            "parsed_resume": parsed_resume,
+            "jd_text": jd_text or "No specific job description provided. Tailor for the target role generically.",
+            "target_role": target_role,
+            "target_company": target_company
+        },
+        output_schema=TailoredResume,
+        temperature=0.1,
+    )
+
     return result
 
 
 def calculate_match_score(resume_skills: list, tailored_skills: list) -> float:
-    """Calculate skill alignment score 0-100."""
+    """
+    Calculate skill alignment score 0-100 using fuzzy substring matching.
+    Handles cases like 'AWS (API Gateway, Lambda)' matching 'AWS'.
+    """
     if not resume_skills or not tailored_skills:
         return 50.0
 
+    # Flatten resume skills to lowercase for matching
     resume_skill_items = set()
     for skill_cat in resume_skills:
         if isinstance(skill_cat, dict):
-            resume_skill_items.update(skill_cat.get("items", []))
+            for item in skill_cat.get("items", []):
+                resume_skill_items.add(item.lower().strip())
 
-    matched = sum(1 for skill in tailored_skills if skill in resume_skill_items)
+    matched = 0
+    for tailored_skill in tailored_skills:
+        tailored_lower = tailored_skill.lower().strip()
+        # Check exact match OR if any resume skill is contained in tailored skill
+        for resume_skill in resume_skill_items:
+            if resume_skill in tailored_lower or tailored_lower in resume_skill:
+                matched += 1
+                break
+
     return min(100.0, (matched / len(tailored_skills)) * 100) if tailored_skills else 50.0
 
-
-def generate_visa_advice(education: list) -> str:
-    """Generate visa eligibility advice based on NFQ education level."""
-    if not education:
-        return "Review education details to determine visa eligibility."
-
-    max_nfq = max(
-        [edu.get("nfq_level", 0) for edu in education if isinstance(edu, dict)],
-        default=0,
-    )
-
-    if max_nfq >= 9:
-        return (
-            "Eligible for 24-month Stamp 1G as a Master's degree holder (NFQ Level 9). "
-            "CSEP threshold: €40,904 general | €36,848 recent grads."
-        )
-    if max_nfq == 8:
-        return (
-            "Eligible for 12-month Stamp 1G as a Bachelor's degree holder (NFQ Level 8). "
-            "A Master's (NFQ 9) extends Stamp 1G to 24 months."
-        )
-    return "Verify education credentials. Minimum NFQ Level 8 is required for Stamp 1G."
 
 # ────────────────────────────────────────────────
 # Standalone Test (run: python -m backend.app.services.resume_tailor)

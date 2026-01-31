@@ -2,33 +2,79 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from pydantic import BaseModel
 from uuid import uuid4
 import PyPDF2
+import json
 from io import BytesIO
 
 from ...agents.graph import graph
+from ...core.cache import redis
 
 router = APIRouter(prefix="/resume", tags=["resume"])
+
 
 class ProcessResponse(BaseModel):
     thread_id: str
     parsed_resume: dict | None = None
     tailored_resume: dict | None = None
     match_score: float = 0.0
-    visa_advice: str = ""
-    salary_gap_analysis: str | None = None
+    job_used: dict | None = None
     messages: list[str] = []
+
 
 @router.post("/process", response_model=ProcessResponse)
 async def process_resume(
     file: UploadFile | None = File(None),
-    target_role: str = Query(..., description="Target job title, e.g. 'AI Engineer'"),
-    target_company: str = Query("", description="Optional: Target company, e.g. 'Stripe Ireland'"),
-    proposed_salary: float | None = Query(None, description="Optional proposed annual salary €"),
+    job_id: str | None = Query(None, description="Job ID from /jobs/search — auto-fills role, company"),
+    target_role: str | None = Query(None, description="Target job title (auto-filled if job_id provided)"),
+    target_company: str | None = Query(None, description="Target company (auto-filled if job_id provided)"),
     thread_id: str = Query(default_factory=lambda: str(uuid4()), description="Session ID (reuse for updates)"),
 ):
+    """
+    Resume tailoring pipeline.
+
+    1. Upload PDF → Parse resume
+    2. Tailor for specific JD if job_id provided
+    3. Returns tailored summary, achievement bullets, and skills
+    """
     config = {"configurable": {"thread_id": thread_id}}
-    """
-    Full pipeline: upload PDF → parse → tailor → match score + visa advice.
-    """
+
+    jd_text = ""
+    job_used = None
+
+    # Fetch job details from cache if job_id provided
+    if job_id:
+        if not redis:
+            raise HTTPException(503, "Cache unavailable. Provide target_role manually.")
+
+        found = False
+        for key in redis.scan_iter("jobs:*"):
+            cached = redis.get(key)
+            if cached:
+                jobs = json.loads(cached)
+                for job in jobs:
+                    if job.get("id") == job_id:
+                        jd_text = job.get("description", "")
+                        target_role = target_role or job.get("title", "Software Engineer")
+                        target_company = target_company or job.get("company", "")
+
+                        job_used = {
+                            "id": job_id,
+                            "title": job.get("title"),
+                            "company": job.get("company"),
+                            "location": job.get("location", ""),
+                            "url": job.get("url")
+                        }
+                        found = True
+                        break
+                if found:
+                    break
+
+        if not found:
+            raise HTTPException(404, f"Job '{job_id}' not found in cache. Run /jobs/search first.")
+
+    # Require target_role if no job_id
+    if not target_role:
+        raise HTTPException(400, "target_role is required when job_id is not provided")
+
     if file:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files allowed")
@@ -43,8 +89,9 @@ async def process_resume(
 
         input_state = {
             "raw_text": raw_text,
+            "jd_text": jd_text,
             "target_role": target_role,
-            "target_company": target_company,
+            "target_company": target_company or "",
             "messages": []
         }
     else:
@@ -53,32 +100,21 @@ async def process_resume(
             raise HTTPException(400, "No active session. Upload PDF first.")
 
         input_state = {
+            "jd_text": jd_text,
             "target_role": target_role,
-            "target_company": target_company,
+            "target_company": target_company or "",
             "messages": []
         }
 
     try:
-        result = graph.invoke(input_state, config= config)
-
-        salary_gap = None
-        if proposed_salary is not None and result.get("visa_advice"):
-            is_recent_grad = "recent" in result["visa_advice"].lower()
-            threshold = 36848 if is_recent_grad else 40904
-            gap = threshold - proposed_salary
-            direction = "below" if gap > 0 else "above"
-            salary_gap = (
-                f"Proposed €{proposed_salary:,.0f} is €{abs(gap):,.0f} {direction} "
-                f"the CSEP threshold (€{threshold:,.0f} {'Graduate Band' if is_recent_grad else 'standard'})."
-            )
+        result = graph.invoke(input_state, config=config)
 
         return ProcessResponse(
             thread_id=thread_id,
             parsed_resume=result.get("parsed_resume"),
             tailored_resume=result.get("tailored_resume"),
             match_score=result.get("match_score", 0.0),
-            visa_advice=result.get("visa_advice", ""),
-            salary_gap_analysis=salary_gap,
+            job_used=job_used,
             messages=[msg.content for msg in result.get("messages", [])]
         )
 

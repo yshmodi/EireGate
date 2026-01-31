@@ -32,10 +32,9 @@ class Project(BaseModel):
 class Resume(BaseModel):
     name: str
     contact: ContactInfo
-    summary: str=""
+    summary: str = ""
     education: List[EducationEntry] = Field(min_length=1)
     experience: List[ExperienceEntry] = []
     skills: List[SkillCategory] = Field(min_length=1)
     projects: List[Project] = []
     certifications: List[dict] = []
-    visa_notes: dict = Field(default_factory=dict)

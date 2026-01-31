@@ -1,51 +1,39 @@
-import os
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from tenacity import retry, stop_after_attempt, wait_fixed
+from loguru import logger
 
 from ..models.resume import Resume
+from ..core.llm_router import invoke_with_fallback, get_current_provider
 
-load_dotenv()
-
-llm = ChatGoogleGenerativeAI(
-    model="models/gemini-2.5-flash",
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
-    temperature=0.1,
-    max_output_tokens=4096,
-)
-
-structured_llm = llm.with_structured_output(Resume, method="json_schema")
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", """
-You are a precise resume parser for non-EEA graduates seeking jobs in Ireland.
+You are a precise resume parser that extracts structured data from raw resume text.
 From the raw text (often noisy from PDF extraction), extract structured data into the Resume schema.
+
 Rules:
 - Clean typos, fix formatting (e.g., "AngualrJS" → "AngularJS", "RESTful" → "RESTful").
-- Infer NFQ level: Level 9 (Master's) or 10 (PhD) → visa_notes["stamp_1g_months"] = 24
-  Level 8 (Honours Bachelor) → 12 months. Default to unknown if unclear.
-- Categorize skills logically (e.g., "Programming", "AI/ML", "Cloud", "Soft Skills").
+- Categorize skills logically (e.g., "Programming Languages", "Frameworks", "Cloud/DevOps", "Soft Skills").
+- Infer education level: assign nfq_level 10 for PhD, 9 for Master's, 8 for Bachelor's.
 - Keep bullets/achievements as-is but clean language.
 - Output ONLY valid JSON matching the schema — no explanations.
 """),
     ("human", "Raw resume text:\n{raw_text}\n\nParse into structured Resume."),
 ])
 
-chain = prompt | structured_llm
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def parse_resume(raw_text: str) -> Resume:
-    result = chain.invoke({"raw_text": raw_text})
-    #Post-process visa inference if model missed it
-    if not result.visa_notes.get("stamp_1g_months"):
-        for edu in result.education:
-            if edu.nfq_level or edu.nfq_level >= 9:
-                result.visa_notes["stamp_1g_months"] = 24
-                break
-            elif edu.nfq_level == 8:
-                result.visa_notes["stamp_1g_months"] = 12
-                break
+    """
+    Parse resume using multi-LLM router with automatic fallback.
+    """
+    logger.info(f"Parsing resume with {get_current_provider()}...")
+
+    result = invoke_with_fallback(
+        prompt_template=prompt,
+        input_data={"raw_text": raw_text},
+        output_schema=Resume,
+        temperature=0.1,
+    )
+
     return result
 
 # if __name__ == "__main__":

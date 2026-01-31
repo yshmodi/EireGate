@@ -7,14 +7,15 @@ import logging
 from ...services.resume_parser import parse_resume
 from ...models.resume import Resume
 
-router = APIRouter()
+router = APIRouter(prefix="/resume", tags=["resume"])
 
 logger = logging.getLogger(__name__)
 
 @router.post("/upload", response_model=Resume)
 async def upload_and_parse_resume(file: UploadFile = File(...)):
-    """Uploads PDF resume -> extract text -> parse into structtured Resume model using Gemini.
-    Returns structured data + visa notes.
+    """
+    Upload PDF resume → extract text → parse into structured Resume model using Gemini.
+    Returns structured data with skills, education, experience, and projects.
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF files are supported.")
@@ -38,8 +39,7 @@ async def upload_and_parse_resume(file: UploadFile = File(...)):
         return JSONResponse(
             content={
                 "status": "success",
-                "parsed_resume": parsed_resume.model_dump(),
-                "visa_summary": f"Eligible for up to {parsed_resume.visa_notes.get('stamp_1g_months', 'unknown')} months Stamp 1G"
+                "parsed_resume": parsed_resume.model_dump()
             },
             status_code=200
         )

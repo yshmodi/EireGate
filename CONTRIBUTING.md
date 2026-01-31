@@ -1,28 +1,29 @@
 # Contributing to EireGate
 
 ## Scope
-EireGate is a multi-agent system for Irish immigration compliance, job-to-visa gap analysis, and resume tailoring.
+EireGate is an AI-powered job matching platform that analyzes resumes and finds best-fit jobs globally with smart match scores.
 
-## Development setup
+## Development Setup
 ```bash
-python -m venv venv
-source venv/bin/activate
+conda activate eiregate
 pip install -r requirements.txt
 ```
 
 ## Run API
 ```bash
 cd backend
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8000
 ```
 
-## Project conventions
-- Agent workflows are **LangGraph state machines** (no linear chains).
-- Use **Pydantic models** for all API inputs/outputs.
-- Use the **2026 Irish visa thresholds** as source of truth (see README).
-- Never commit secrets; use `backend/.env` locally and `backend/.env.example` for templates.
+## Project Conventions
+- Agent workflows use **LangGraph state machines** (not linear chains)
+- Use **Pydantic models** for all API inputs/outputs
+- Use the **Multi-LLM Router** (`core/llm_router.py`) for all LLM calls
+- Never commit secrets; use `.env` locally and `.env.example` for templates
+- Log with `loguru`, not `print()`
 
-## PR checklist
-- Verify API routes under `/api/v1/*`.
-- Maintain deterministic visa logic (temperature=0.3 for Gemini).
-- Include reasoning in any visa eligibility response.
+## PR Checklist
+- [ ] API routes under `/api/v1/*`
+- [ ] LLM calls use `invoke_with_fallback()` from llm_router
+- [ ] New endpoints have Pydantic request/response models
+- [ ] No hardcoded API keys

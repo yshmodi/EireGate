@@ -1,23 +1,9 @@
 # EireGate: Copilot Instructions for AI Coding Agents
 
 ## Project Overview
-EireGate is a **multi-agent agentic system** helping non-EEA graduates navigate 2026 Irish immigration and secure employment. It uses **LangGraph** (state machine agents), **FastAPI** (backend), and **Next.js** (frontend).
+EireGate is an **AI-powered job matching platform** that analyzes resumes and finds the best-fit jobs globally. It uses **LangGraph** (state machine agents), **FastAPI** (backend), and **Next.js** (frontend).
 
-**Core Domain**: Irish employment permits, visa thresholds, job-to-resume alignment, and critical skills matching.
-
----
-
-## 2026 Irish Immigration Thresholds (Source of Truth)
-
-Use these exact figures in all agent responses and code logic:
-
-| Permit Type | General Salary Threshold | Recent Grad Threshold | Notes |
-|---|---|---|---|
-| **CSEP** (Critical Skills) | €40,904 | €36,848 | Effective March 1, 2026 |
-| **GEP** (General) | €36,605 | €34,009 | For all occupations |
-| **Stamp 1G** | — | 24 months | Master's degree holders only |
-
-**Critical Skills List** (prioritize): AI Engineer, Data Scientist, Software Engineer
+**Core Domain**: Resume parsing, job matching, skill alignment scoring, and job search aggregation.
 
 ---
 
@@ -26,19 +12,19 @@ Use these exact figures in all agent responses and code logic:
 ### Backend: LangGraph Agents (State Machine Mindset)
 - **Never** model agents as pipelines; use **checkpoints & persistence**
 - Each agent is a state graph: `state = {"context": {...}, "messages": [], "decisions": {}}`
-- Example agents: `JobAnalyzerAgent`, `VisaEligibilityAgent`, `ResumeOptimizerAgent`
+- Example agents: `ResumeParserAgent`, `JobMatcherAgent`, `ResumeTailorAgent`
 - Use `langgraph.graph.StateGraph` for composing multi-step workflows
 
 ### API Layer: FastAPI
 - All endpoints return **structured Pydantic responses**
-- Use `fastapi.background_tasks` for long-running agent workflows
-- Endpoints follow: `/api/{agent}/{action}` (e.g., `/api/visa/check-eligibility`)
+- Endpoints follow: `/api/v1/{resource}/{action}` (e.g., `/api/v1/resume/upload`)
 - Include request validation with `pydantic_settings` for secrets (.env integration)
 
-### Integration with Google Gemini
-- Use `langchain_google_genai` (v4.2.0+) for LLM calls
-- Set `temperature=0.3` for deterministic visa/compliance decisions
-- Implement retry logic with `tenacity` (9.0.0+) for API resilience
+### Multi-LLM Router
+- Primary: Google Gemini (`gemini-2.0-flash`)
+- Fallbacks: OpenRouter, Mistral, HuggingFace
+- All providers are free-tier compatible
+- Use `invoke_with_fallback()` from `core/llm_router.py` for automatic failover
 
 ---
 
@@ -50,15 +36,15 @@ from pydantic import BaseModel, Field
 
 class JobPosting(BaseModel):
     title: str = Field(..., description="Job title")
-    salary_eur: float = Field(..., ge=0)
-    years_required: int
+    company: str
+    location: str
     skills: list[str]
+    url: str
 
-class VisaCheckResult(BaseModel):
-    permit_type: str  # "CSEP" | "GEP"
-    eligible: bool
-    gap_eur: float  # Salary shortfall from threshold
-    reasoning: str
+class MatchScore(BaseModel):
+    score: float = Field(..., ge=0, le=100)
+    matched_skills: list[str]
+    missing_skills: list[str]
 ```
 
 ### LangGraph Agent Pattern
@@ -67,22 +53,23 @@ from langgraph.graph import StateGraph
 from typing import TypedDict
 
 class AgentState(TypedDict):
-    job_posting: JobPosting
-    candidate_salary: float
+    raw_text: str
+    parsed_resume: dict
+    target_role: str
     messages: list[dict]
 
-def visa_check_node(state: AgentState) -> AgentState:
-    # Agent logic here
+def extract_node(state: AgentState) -> AgentState:
+    # Parse resume logic here
     return state
 
 graph = StateGraph(AgentState)
-graph.add_node("visa_check", visa_check_node)
+graph.add_node("extract", extract_node)
 # ... add more nodes and edges
 ```
 
 ### Error Handling
 - Use `HTTPException` with 400/422 for validation errors
-- Use custom domain exceptions: `IneligibleForVisaError`, `ResumeParseError`
+- Use custom domain exceptions: `ResumeParseError`, `JobNotFoundError`
 - Always log with `loguru` (not print)
 
 ---
@@ -91,38 +78,44 @@ graph.add_node("visa_check", visa_check_node)
 
 ### Setup
 ```bash
-python -m venv venv
-source venv/bin/activate
+conda activate eiregate
+cd backend
 pip install -r requirements.txt
 ```
 
 ### Running Backend
 ```bash
 cd backend
-uvicorn main:app --reload
+uvicorn app.main:app --reload --port 8000
 ```
 
-### Testing Agents Locally
-- Mock Google Gemini with `langchain.llm_cache` or fixture
-- Use `langgraph` built-in visualization: `graph.get_graph().draw_ascii()`
+### Testing LLM Providers
+```bash
+curl http://localhost:8000/health/llm/test
+```
 
 ---
 
-## Key Integration Points
+## Key Files
 
-1. **Resume → Job Matching**: Parse PDF (PyPDF2) → extract skills → match against job posting
-2. **Salary Validation**: Compare offered salary against permit thresholds + cost-of-living adjustments
-3. **Visa Eligibility**: Route through CSEP → GEP based on skill criticality and salary
-4. **Compliance Logging**: All visa decisions must include reasoning + timestamp
+| File | Purpose |
+|------|---------|
+| `core/llm_router.py` | Multi-LLM router with automatic fallback |
+| `agents/graph.py` | LangGraph workflow definition |
+| `agents/nodes.py` | Agent node functions (extract, tailor) |
+| `services/resume_parser.py` | LLM-powered resume parsing |
+| `services/resume_tailor.py` | Resume tailoring + match scoring |
+| `services/job_service.py` | JobSpy wrapper for job search |
 
 ---
 
 ## Avoid These Patterns
 
 - ❌ Building agents without state graphs (use LangGraph, not chains)
-- ❌ Hardcoding salary thresholds in prompts (centralize in config)
+- ❌ Hardcoding API keys (use .env)
 - ❌ Async/await without proper error boundaries
 - ❌ Unvalidated user input to LLM (always sanitize + validate first)
+- ❌ Using print() instead of loguru logger
 
 ---
 
@@ -130,4 +123,4 @@ uvicorn main:app --reload
 
 - [LangGraph Docs](https://langchain-ai.github.io/langgraph/)
 - [FastAPI Dependency Injection](https://fastapi.tiangolo.com/tutorial/dependencies/)
-- Irish Immigration Bureau 2026 Salary Thresholds (March 1 effective date)
+- [JobSpy Documentation](https://github.com/Bunsly/JobSpy)
