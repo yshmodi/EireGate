@@ -8,11 +8,13 @@ AI-powered job matching platform that analyzes resumes and finds the best-fit jo
 - 🎯 **Match Scoring** — Skill alignment scoring (0-100%)
 - ✨ **Resume Tailoring** — AI rewrites resume for specific job descriptions
 - 🔄 **Multi-LLM Router** — Automatic fallback between Gemini, OpenRouter, Mistral, HuggingFace
+- 🔐 **Authentication** — Email/password + Google/GitHub OAuth via Supabase
 
 ## Tech Stack
 | Layer | Technology |
 |-------|------------|
 | Backend | FastAPI, Python 3.11, Pydantic |
+| Auth | Supabase Auth (Email, Google, GitHub) |
 | LLM | Multi-router (Gemini, OpenRouter, Mistral, HuggingFace) |
 | Agents | LangGraph with Supabase checkpointer |
 | Job Scraping | JobSpy (LinkedIn, Indeed, Glassdoor) |
@@ -73,6 +75,15 @@ GET /api/v1/jobs/search       # Search jobs (LinkedIn, Indeed, Glassdoor)
 GET /api/v1/jobs/{job_id}     # Get single job by ID
 ```
 
+### Auth
+```
+POST /api/v1/auth/signup      # Register with email/password
+POST /api/v1/auth/login       # Login with email/password
+POST /api/v1/auth/logout      # Logout (requires token)
+GET  /api/v1/auth/me          # Get current user (requires token)
+GET  /api/v1/auth/oauth/{provider}  # Get OAuth URL (google/github)
+```
+
 ## Project Structure
 ```
 backend/
@@ -104,8 +115,9 @@ curl http://localhost:8000/health/llm/test/Gemini
 - ✅ Backend API complete
 - ✅ Multi-LLM routing with fallback
 - ✅ Job search & caching
-- 🚧 Database schema (next)
-- 🚧 Supabase Auth (next)
+- ✅ Database schema (Supabase)
+- ✅ Supabase Auth (email + OAuth ready)
+- 🚧 Resume storage API (next)
 - 🚧 Frontend (Next.js)
 
 ## License

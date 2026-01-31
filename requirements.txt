@@ -47,3 +47,4 @@ numpy>=1.26.0
 langgraph-checkpoint-postgres>=3.0.0
 psycopg[binary]>=3.3.0
 
+supabase>=2.0.0
